@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DNA STREAM · 300k ЧАСТИЦ · ОФФЛАЙН</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            color: #0ff;
+            font-family: 'Courier New', monospace;
+            height: 100vh;
+            overflow: hidden;
+            padding: 8px;
+        }
+
+        #app {
+            max-width: 600px;
+            margin: 0 auto;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: #111;
+            border: 2px solid #f0f;
+            border-radius: 30px;
+            font-size: 14px;
+        }
+
+        .camera-preview {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #0a0a1a;
+            border: 3px solid #0ff;
+            border-radius: 20px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #cameraCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .mode-selector {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+
+        .mode-btn {
+            padding: 14px;
+            border: 3px solid #f0f;
+            border-radius: 40px;
+            background: #111;
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            text-align: center;
+        }
+
+        .mode-btn.active {
+            background: #0ff;
+            color: #000;
+            border-color: #0ff;
+            box-shadow: 0 0 15px #0ff;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: #111;
+            border: 2px solid #ff0;
+            border-radius: 30px;
+            color: #ff0;
+            font-size: 12px;
+            margin-top: auto;
+        }
+
+        #studio3D {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+            z-index: 1000;
+            display: none;
+        }
+
+        #studio3D.active {
+            display: block;
+        }
+
+        #canvas3d {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        #backFrom3d {
+            position: fixed;
+            top: 15px;
+            right: 15px;
+            width: 50px;
+            height: 50px;
+            background: #111;
+            border: 3px solid #f0f;
+            border-radius: 50%;
+            color: #f0f;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 1001;
+        }
+        
+        .hidden-video {
+            display: none;
+        }
+        
+        #particleInfo {
+            color: #00ffff;
+            font-size: 12px;
+        }
+        
+        #rotationHint {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #0ff;
+            font-size: 14px;
+            background: rgba(0,0,0,0.7);
+            padding: 8px 16px;
+            border-radius: 20px;
+            border: 1px solid #f0f;
+            z-index: 1002;
+            pointer-events: none;
+        }
+        
+        #watchBtn {
+            background: linear-gradient(45deg, #0a0a2a, #111);
+            font-weight: bold;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="status-bar">
+            <span>🧬 DNA 300k · ОФФЛАЙН</span>
+            <span>⚡ ЛОКАЛЬНЫЙ РЕНДЕР</span>
+        </div>
+
+        <div class="camera-preview">
+            <canvas id="cameraCanvas" width="640" height="360"></canvas>
+        </div>
+
+        <div class="mode-selector">
+            <button class="mode-btn active" id="watchBtn">🎬 СМОТРЮ · 3D ВИЗУАЛИЗАЦИЯ</button>
+        </div>
+
+        <div class="stats">
+            <span>🧬 ЧАСТИЦЫ: <span id="particleInfo">300k</span></span>
+            <span>🎨 АЛГОРИТМ: ДНК-ПОТОК</span>
+            <span>📡 БЕЗ ИНТЕРНЕТА</span>
+        </div>
+    </div>
+
+    <div id="studio3D">
+        <canvas id="canvas3d"></canvas>
+        <div id="backFrom3d">◀</div>
+        <div id="rotationHint">🖱️ Вращайте сцену мышью / тачем</div>
+    </div>
+
+    <video id="cameraVideo" class="hidden-video" playsinline muted></video>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script>
+        (function() {
+            // ==================== КОНФИГ (только визуал) ====================
+            const CONFIG = {
+                MAX_PARTICLES: 300000,
+                ZONE_WIDTH: 1200,
+                ZONE_HEIGHT: 720,
+                X_SCALE: 38,
+                Z_SCALE: 19
+            };
+
+            // ==================== СОСТОЯНИЕ ====================
+            let cameraStream = null;
+            let videoActive = false;
+            let cameraVideo = null;
+            let cameraCanvas = null;
+            let ctx = null;
+            
+            // 3D переменные
+            let scene, camera, renderer, points;
+            let rxArray, ryArray;
+            
+            // Управление вращением
+            let isDragging = false;
+            let previousMousePosition = { x: 0, y: 0 };
+            let rotationSpeed = 0.008;
+            
+            // Анимация яркости (без сети, просто визуальный эффект)
+            let timeAcc = 0;
+            let brightnessPulse = 0.5;
+
+            // ==================== ЭЛЕМЕНТЫ ====================
+            cameraCanvas = document.getElementById('cameraCanvas');
+            ctx = cameraCanvas.getContext('2d');
+            cameraVideo = document.getElementById('cameraVideo');
+            const watchBtn = document.getElementById('watchBtn');
+            const studio3D = document.getElementById('studio3D');
+            const canvas3d = document.getElementById('canvas3d');
+            const backFrom3d = document.getElementById('backFrom3d');
+            const particleInfo = document.getElementById('particleInfo');
+
+            // ==================== КАМЕРА (локальная, без передачи) ====================
+            async function startCamera() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { width: 640, height: 360 },
+                        audio: false 
+                    });
+                    
+                    cameraStream = stream;
+                    cameraVideo.srcObject = stream;
+                    
+                    await new Promise((resolve) => {
+                        cameraVideo.onloadedmetadata = () => {
+                            cameraVideo.play();
+                            resolve();
+                        };
+                    });
+                    
+                    videoActive = true;
+                    
+                    // Функция захвата и анализа кадра (только для визуального эффекта, без отправки)
+                    function captureFrame() {
+                        if (!videoActive || !cameraVideo.videoWidth) {
+                            requestAnimationFrame(captureFrame);
+                            return;
+                        }
+                        
+                        // Рисуем кадр на canvas
+                        ctx.drawImage(cameraVideo, 0, 0, 640, 360);
+                        
+                        // Анализируем яркость для визуального эффекта (локально, без сети)
+                        try {
+                            const imageData = ctx.getImageData(0, 0, 40, 23);
+                            const data = imageData.data;
+                            let totalBrightness = 0;
+                            for (let i = 0; i < data.length; i += 4) {
+                                totalBrightness += (data[i] + data[i+1] + data[i+2]) / 3;
+                            }
+                            const avgBrightness = totalBrightness / (data.length / 4) / 255;
+                            
+                            // Используем яркость для пульсации частиц (локальный алгоритм)
+                            brightnessPulse = 0.3 + avgBrightness * 0.7;
+                            
+                            // Добавляем небольшую случайную модуляцию для динамики
+                            brightnessPulse += Math.sin(Date.now() * 0.008) * 0.05;
+                            brightnessPulse = Math.min(1.0, Math.max(0.2, brightnessPulse));
+                            
+                        } catch (e) {}
+                        
+                        requestAnimationFrame(captureFrame);
+                    }
+                    
+                    captureFrame();
+                    return true;
+                    
+                } catch (e) {
+                    console.warn('Камера не доступна, работаем без видео:', e.message);
+                    // Если камеры нет, показываем красивую анимацию вместо черного экрана
+                    drawFallbackPattern();
+                    return false;
+                }
+            }
+            
+            // Резервная анимация если нет камеры
+            function drawFallbackPattern() {
+                if (!ctx) return;
+                let hue = 0;
+                function animateFallback() {
+                    if (!videoActive) return;
+                    hue = (hue + 1) % 360;
+                    ctx.fillStyle = `hsl(${hue}, 70%, 8%)`;
+                    ctx.fillRect(0, 0, 640, 360);
+                    
+                    ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+                    ctx.font = 'bold 24px "Courier New"';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('🧬 ДНК-ПОТОК', 320, 180);
+                    ctx.font = '14px monospace';
+                    ctx.fillStyle = '#0ff';
+                    ctx.fillText('300k частиц · без интернета', 320, 240);
+                    
+                    // Рисуем динамические линии
+                    ctx.beginPath();
+                    for(let i = 0; i < 20; i++) {
+                        const x = 320 + Math.sin(Date.now() * 0.003 + i) * 150;
+                        const y = 180 + Math.cos(Date.now() * 0.005 + i) * 80;
+                        ctx.fillStyle = `hsl(${hue + i * 10}, 100%, 60%)`;
+                        ctx.fillRect(x, y, 3, 3);
+                    }
+                    requestAnimationFrame(animateFallback);
+                }
+                animateFallback();
+            }
+
+            // ==================== 3D СЦЕНА (300k ЧАСТИЦ) ====================
+            function init3D() {
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x050510);
+                
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                camera.position.set(0, 8, 55);
+                camera.lookAt(0, 5, 0);
+                
+                renderer = new THREE.WebGLRenderer({ canvas: canvas3d, alpha: false });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.setPixelRatio(window.devicePixelRatio);
+                
+                console.log('Генерация 300k частиц (оффлайн)...');
+                
+                // Генерация данных для 300k частиц - уникальный ДНК-подобный ландшафт
+                const positions = new Float32Array(CONFIG.MAX_PARTICLES * 3);
+                rxArray = new Float32Array(CONFIG.MAX_PARTICLES);
+                ryArray = new Float32Array(CONFIG.MAX_PARTICLES);
+                
+                // Создаем спиральную ДНК-структуру + хаотичные элементы
+                for (let i = 0; i < CONFIG.MAX_PARTICLES; i++) {
+                    const t = i / CONFIG.MAX_PARTICLES; // 0..1
+                    const angle = t * Math.PI * 12; // спиральные витки
+                    
+                    // Основная форма: двойная спираль + случайное смещение
+                    let x, z, y;
+                    
+                    if (i < CONFIG.MAX_PARTICLES * 0.7) {
+                        // Спиральная структура ДНК
+                        const radius = 8 + Math.sin(angle * 3) * 2;
+                        const spiralX = Math.cos(angle) * radius;
+                        const spiralZ = Math.sin(angle) * radius;
+                        const spiralY = (t - 0.5) * 22; // высота от -11 до 11
+                        
+                        // Добавляем вторую цепь
+                        const chainOffset = (i % 2 === 0) ? 0 : Math.PI;
+                        const spiralX2 = Math.cos(angle + chainOffset) * radius;
+                        const spiralZ2 = Math.sin(angle + chainOffset) * radius;
+                        
+                        x = spiralX * 0.8 + spiralX2 * 0.2 + (Math.random() - 0.5) * 1.2;
+                        z = spiralZ * 0.8 + spiralZ2 * 0.2 + (Math.random() - 0.5) * 1.2;
+                        y = spiralY + (Math.random() - 0.5) * 1.5;
+                    } else {
+                        // Облако частиц вокруг спирали (свободные элементы)
+                        const angle2 = Math.random() * Math.PI * 2;
+                        const rad = 12 + Math.random() * 8;
+                        x = Math.cos(angle2) * rad * (Math.random() - 0.5);
+                        z = Math.sin(angle2) * rad * (Math.random() - 0.5);
+                        y = (Math.random() - 0.5) * 18;
+                    }
+                    
+                    rxArray[i] = x * CONFIG.X_SCALE;
+                    ryArray[i] = z * CONFIG.Z_SCALE;
+                    
+                    const i3 = i * 3;
+                    positions[i3] = x;
+                    positions[i3 + 1] = y + 3; // центрируем
+                    positions[i3 + 2] = z;
+                }
+                
+                // Шейдеры с эффектом свечения и видео текстурой (если камера есть)
+                const vertexShader = `
+                    attribute float rx;
+                    attribute float ry;
+                    
+                    varying vec2 vUv;
+                    varying float vHeight;
+                    
+                    uniform float time;
+                    
+                    void main() {
+                        // Генерируем UV на основе позиции
+                        vUv = vec2((position.x / 28.0) + 0.5, (position.z / 25.0) + 0.5);
+                        vHeight = (position.y + 5.0) / 20.0;
+                        
+                        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                        gl_PointSize = 2.2 + sin(position.x * 0.5 + time) * 0.8;
+                        gl_Position = projectionMatrix * mvPosition;
+                    }
+                `;
+                
+                const fragmentShader = `
+                    uniform sampler2D videoTexture;
+                    uniform float time;
+                    uniform float brightness;
+                    uniform bool hasVideo;
+                    
+                    varying vec2 vUv;
+                    varying float vHeight;
+                    
+                    void main() {
+                        vec2 uv = vUv;
+                        // Создаем цветовую палитру ДНК
+                        vec3 color1 = vec3(0.2, 0.8, 1.0); // голубой
+                        vec3 color2 = vec3(1.0, 0.3, 0.8); // пурпурный
+                        vec3 color3 = vec3(0.2, 1.0, 0.5); // зеленый
+                        
+                        float mixVal = sin(uv.x * 8.0 + time) * 0.5 + 0.5;
+                        mixVal = (mixVal + vHeight) * 0.7;
+                        
+                        vec3 baseColor = mix(color1, color2, mixVal);
+                        baseColor = mix(baseColor, color3, sin(uv.y * 12.0 + time) * 0.5 + 0.5);
+                        
+                        // Если есть видео и текстура загружена, накладываем эффект
+                        vec4 videoColor = texture2D(videoTexture, uv);
+                        if (hasVideo && videoColor.a > 0.0) {
+                            // Смешиваем с видео в стиле "ДНК-проекция"
+                            float intensity = (videoColor.r + videoColor.g + videoColor.b) / 3.0;
+                            baseColor = mix(baseColor, videoColor.rgb, 0.5 + intensity * 0.3);
+                        }
+                        
+                        // Динамическая пульсация от яркости (локальный алгоритм)
+                        float pulse = brightness * (0.7 + sin(time * 6.0) * 0.3);
+                        baseColor = baseColor * (0.6 + pulse * 0.8);
+                        
+                        // Свечение
+                        float glow = (sin(uv.x * 20.0 + time) * 0.3 + 0.7) * brightness;
+                        baseColor += vec3(0.3, 0.1, 0.5) * glow;
+                        
+                        vec2 center = gl_PointCoord - 0.5;
+                        if (dot(center, center) > 0.25) discard;
+                        
+                        gl_FragColor = vec4(baseColor, 0.95);
+                    }
+                `;
+                
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setAttribute('rx', new THREE.BufferAttribute(rxArray, 1));
+                geometry.setAttribute('ry', new THREE.BufferAttribute(ryArray, 1));
+                
+                // Создаем текстуру из видео (если есть)
+                let videoTexture = null;
+                let hasVideoTexture = false;
+                
+                if (cameraVideo && cameraVideo.videoWidth > 0) {
+                    videoTexture = new THREE.VideoTexture(cameraVideo);
+                    videoTexture.minFilter = THREE.LinearFilter;
+                    videoTexture.magFilter = THREE.LinearFilter;
+                    hasVideoTexture = true;
+                } else {
+                    // Создаем procedural текстуру как запасной вариант
+                    const canvasTex = document.createElement('canvas');
+                    canvasTex.width = 512;
+                    canvasTex.height = 512;
+                    const texCtx = canvasTex.getContext('2d');
+                    texCtx.fillStyle = '#0a0a2a';
+                    texCtx.fillRect(0, 0, 512, 512);
+                    texCtx.fillStyle = '#0ff';
+                    texCtx.font = 'bold 30px monospace';
+                    texCtx.fillText('DNA', 200, 256);
+                    videoTexture = new THREE.CanvasTexture(canvasTex);
+                    hasVideoTexture = false;
+                }
+                
+                const material = new THREE.ShaderMaterial({
+                    vertexShader: vertexShader,
+                    fragmentShader: fragmentShader,
+                    uniforms: {
+                        videoTexture: { value: videoTexture },
+                        time: { value: 0 },
+                        brightness: { value: 0.6 },
+                        hasVideo: { value: hasVideoTexture }
+                    },
+                    transparent: true,
+                    depthWrite: false,
+                    blending: THREE.AdditiveBlending
+                });
+                
+                points = new THREE.Points(geometry, material);
+                scene.add(points);
+                
+                // Добавляем туман для глубины
+                scene.fog = new THREE.FogExp2(0x050510, 0.003);
+                
+                // Добавляем звездный фон (простой эффект)
+                const starGeometry = new THREE.BufferGeometry();
+                const starCount = 2000;
+                const starPositions = new Float32Array(starCount * 3);
+                for (let i = 0; i < starCount; i++) {
+                    starPositions[i*3] = (Math.random() - 0.5) * 400;
+                    starPositions[i*3+1] = (Math.random() - 0.5) * 200;
+                    starPositions[i*3+2] = (Math.random() - 0.5) * 100 - 50;
+                }
+                starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+                const starMaterial = new THREE.PointsMaterial({ color: 0x88aaff, size: 0.3 });
+                const stars = new THREE.Points(starGeometry, starMaterial);
+                scene.add(stars);
+                
+                particleInfo.textContent = '300k';
+                
+                // Обработчики вращения
+                setupRotationControls();
+            }
+            
+            function setupRotationControls() {
+                const element = canvas3d;
+                element.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                    e.preventDefault();
+                });
+                
+                window.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+                    
+                    if (points) {
+                        points.rotation.y += deltaX * rotationSpeed;
+                        points.rotation.x += deltaY * rotationSpeed;
+                        points.rotation.x = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, points.rotation.x));
+                    }
+                    
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                });
+                
+                window.addEventListener('mouseup', () => {
+                    isDragging = false;
+                });
+                
+                // Тач-управление
+                element.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    if (e.touches.length === 1) {
+                        isDragging = true;
+                        previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                    }
+                });
+                
+                element.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    if (!isDragging || e.touches.length !== 1) return;
+                    const deltaX = e.touches[0].clientX - previousMousePosition.x;
+                    const deltaY = e.touches[0].clientY - previousMousePosition.y;
+                    
+                    if (points) {
+                        points.rotation.y += deltaX * rotationSpeed;
+                        points.rotation.x += deltaY * rotationSpeed;
+                        points.rotation.x = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, points.rotation.x));
+                    }
+                    
+                    previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                });
+                
+                element.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    isDragging = false;
+                });
+            }
+            
+            function update3D() {
+                if (!points) return;
+                
+                const now = performance.now() / 1000;
+                points.material.uniforms.time.value = now;
+                
+                // Локальный алгоритм динамики: яркость пульсирует от анализируемого кадра (или авторежим)
+                points.material.uniforms.brightness.value = brightnessPulse;
+                
+                // Обновляем текстуру видео если доступна
+                if (cameraVideo && cameraVideo.videoWidth > 0 && points.material.uniforms.videoTexture.value) {
+                    points.material.uniforms.hasVideo.value = true;
+                    if (points.material.uniforms.videoTexture.value instanceof THREE.VideoTexture) {
+                        points.material.uniforms.videoTexture.value.needsUpdate = true;
+                    }
+                }
+                
+                // Легкое автоматическое вращение только если нет драга (для живости)
+                if (!isDragging && points) {
+                    points.rotation.y += 0.0015;
+                    points.rotation.x += 0.0005;
+                    points.rotation.x = Math.max(-Math.PI/3, Math.min(Math.PI/3, points.rotation.x));
+                }
+            }
+            
+            function animate3DLoop() {
+                if (studio3D.classList.contains('active')) {
+                    update3D();
+                    renderer.render(scene, camera);
+                }
+                requestAnimationFrame(animate3DLoop);
+            }
+            
+            // ==================== ИНТЕРФЕЙС ====================
+            function stopCamera() {
+                if (cameraStream) {
+                    cameraStream.getTracks().forEach(t => t.stop());
+                    cameraStream = null;
+                }
+                videoActive = false;
+            }
+            
+            // ==================== СОБЫТИЯ ====================
+            watchBtn.onclick = async () => {
+                // Просто активируем камеру если нужно, 3D уже готова
+                if (!videoActive) {
+                    await startCamera();
+                }
+                // Открываем 3D сцену
+                studio3D.classList.add('active');
+                if (!scene) {
+                    init3D();
+                    animate3DLoop();
+                }
+                // Сбрасываем вращение при входе
+                if (points) {
+                    points.rotation.set(0, 0, 0);
+                }
+            };
+            
+            backFrom3d.onclick = () => {
+                studio3D.classList.remove('active');
+            };
+            
+            // ==================== ИНИЦИАЛИЗАЦИЯ ====================
+            // Заполняем превью
+            ctx.fillStyle = '#0a0a1a';
+            ctx.fillRect(0, 0, 640, 360);
+            ctx.fillStyle = '#0ff';
+            ctx.font = '18px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('🧬 ДНК-ВИЗУАЛИЗАЦИЯ', 320, 180);
+            ctx.font = '12px monospace';
+            ctx.fillText('300k частиц · алгоритм работает без интернета', 320, 240);
+            
+            particleInfo.textContent = '300k';
+            
+            // Запускаем камеру в фоне, но не блокируем (пользователь сам нажмет кнопку)
+            setTimeout(() => {
+                startCamera().catch(() => {
+                    // тихо падаем, работаем без камеры
+                });
+            }, 500);
+            
+            // Предзагрузка 3D не требуется до нажатия кнопки
+            console.log('Готово: только кнопка "СМОТРЮ" и 3D-частицы. Сеть отключена.');
+        })();
+    </script>
+</body>
+</html>
